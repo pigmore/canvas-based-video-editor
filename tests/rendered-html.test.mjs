@@ -48,3 +48,16 @@ test("uses a standards-compliant internal custom element name", async () => {
   assert.match(runtime, /customElements\.define\("c-body", CanvasBodyElement\)/);
   assert.doesNotMatch(runtime, /customElements\.define\("cbody"/);
 });
+
+test("includes host suspension and ECS viewport culling", async () => {
+  const runtime = await readFile(
+    new URL("../app/canvas-ecs.ts", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(runtime, /class VisibilitySystem/);
+  assert.match(runtime, /new IntersectionObserver/);
+  assert.match(runtime, /subtreeInViewport/);
+  assert.match(runtime, /rendered: stats\.rendered/);
+  assert.match(runtime, /culled: stats\.culled/);
+});

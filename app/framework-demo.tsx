@@ -328,7 +328,11 @@ type Tab = keyof typeof snippets;
 export function FrameworkDemo() {
   const previewRef = useRef<HTMLDivElement>(null);
   const [tab, setTab] = useState<Tab>("markup");
-  const [entityCount, setEntityCount] = useState(0);
+  const [renderStats, setRenderStats] = useState({
+    entities: 0,
+    rendered: 0,
+    culled: 0,
+  });
 
   useEffect(() => {
     if (!previewRef.current) return;
@@ -354,8 +358,12 @@ export function FrameworkDemo() {
       },
     };
     const onRender = (event: Event) => {
-      const entities = (event as CustomEvent<{ entities: number }>).detail.entities;
-      setEntityCount(entities);
+      const detail = (event as CustomEvent<{
+        entities: number;
+        rendered: number;
+        culled: number;
+      }>).detail;
+      setRenderStats(detail);
     };
     app.addEventListener("cbody:render", onRender);
 
@@ -435,7 +443,8 @@ export function FrameworkDemo() {
         <div className="canvas-frame">
           <div className="frame-toolbar">
             <span><i className="live-dot" /> Canvas output</span>
-            <span>{entityCount || 28} entities</span>
+            <span>{renderStats.entities || 28} entities</span>
+            <span>{renderStats.rendered || 28} painted · {renderStats.culled} culled</span>
             <span>960 × 560</span>
           </div>
           <div className="canvas-preview" ref={previewRef} />

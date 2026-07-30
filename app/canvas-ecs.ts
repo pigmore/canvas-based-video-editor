@@ -54,6 +54,25 @@ type LayoutComponent = {
   contentHeight: number;
 };
 
+type ViewportRect = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+type VisibilityComponent = {
+  inViewport: boolean;
+  subtreeInViewport: boolean;
+  subtreeSize: number;
+  bounds: ViewportRect;
+};
+
+type RenderStats = {
+  rendered: number;
+  culled: number;
+};
+
 type Rule = {
   selector: string;
   declarations: Array<[string, string]>;
@@ -98,6 +117,7 @@ class World {
   readonly bindings = new Map<Entity, BindingComponent>();
   readonly styles = new Map<Entity, StyleComponent>();
   readonly layouts = new Map<Entity, LayoutComponent>();
+  readonly visibility = new Map<Entity, VisibilityComponent>();
 
   create() {
     const entity = this.nextEntity++;
@@ -134,6 +154,27 @@ function resolveLength(value: string, available: number, fallback: number) {
   if (!value || value === "auto") return fallback;
   if (value.endsWith("%")) return available * number(value) / 100;
   return number(value, fallback);
+}
+
+function intersects(a: ViewportRect, b: ViewportRect) {
+  return a.width > 0 &&
+    a.height > 0 &&
+    b.width > 0 &&
+    b.height > 0 &&
+    a.x < b.x + b.width &&
+    a.x + a.width > b.x &&
+    a.y < b.y + b.height &&
+    a.y + a.height > b.y;
+}
+
+function unionBounds(a: ViewportRect, b: ViewportRect): ViewportRect {
+  if (!a.width || !a.height) return b;
+  if (!b.width || !b.height) return a;
+  const x = Math.min(a.x, b.x);
+  const y = Math.min(a.y, b.y);
+  const right = Math.max(a.x + a.width, b.x + b.width);
+  const bottom = Math.max(a.y + a.height, b.y + b.height);
+  return { x, y, width: right - x, height: bottom - y };
 }
 
 function pathValue(data: DataModel, path: string): unknown {
@@ -476,7 +517,63 @@ class LayoutSystem {
   }
 }
 
+class VisibilitySystem {
+  constructor(
+    private world: World,
+    private viewport: () => ViewportRect,
+    private overscan: () => number,
+  ) {}
+
+  update() {
+    const viewport = this.viewport();
+    const padding = this.overscan();
+    const expandedViewport = {
+      x: viewport.x - padding,
+      y: viewport.y - padding,
+      width: viewport.width + padding * 2,
+      height: viewport.height + padding * 2,
+    };
+
+    // Entities are created parent-first, so reverse order lets child subtree
+    // bounds roll up into their parents in one pass.
+    for (const entity of Array.from(this.world.entities).reverse()) {
+      const tree = this.world.tree.get(entity);
+      const layout = this.world.layouts.get(entity);
+      const style = this.world.styles.get(entity);
+      const renderable = Boolean(
+        layout &&
+        style &&
+        style.display !== "none" &&
+        style.opacity > 0 &&
+        layout.width > 0 &&
+        layout.height > 0,
+      );
+      const ownBounds: ViewportRect = renderable && layout
+        ? { x: layout.x, y: layout.y, width: layout.width, height: layout.height }
+        : { x: 0, y: 0, width: 0, height: 0 };
+      let bounds = ownBounds;
+      let subtreeSize = 1;
+
+      for (const child of tree?.children ?? []) {
+        const childVisibility = this.world.visibility.get(child);
+        if (!childVisibility) continue;
+        bounds = unionBounds(bounds, childVisibility.bounds);
+        subtreeSize += childVisibility.subtreeSize;
+      }
+
+      this.world.visibility.set(entity, {
+        inViewport: renderable && intersects(ownBounds, expandedViewport),
+        subtreeInViewport: intersects(bounds, expandedViewport),
+        subtreeSize,
+        bounds,
+      });
+    }
+  }
+}
+
 class RenderSystem {
+  private stats: RenderStats = { rendered: 0, culled: 0 };
+
   constructor(
     private world: World,
     private roots: Entity[],
@@ -484,43 +581,55 @@ class RenderSystem {
     private viewport: () => { width: number; height: number },
   ) {}
 
-  update() {
+  update(): RenderStats {
     const viewport = this.viewport();
+    this.stats = { rendered: 0, culled: 0 };
     this.context.clearRect(0, 0, viewport.width, viewport.height);
     for (const root of this.roots) this.renderNode(root);
+    return this.stats;
   }
 
   private renderNode(entity: Entity) {
     const tree = this.world.tree.get(entity);
     const style = this.world.styles.get(entity);
     const layout = this.world.layouts.get(entity);
+    const visibility = this.world.visibility.get(entity);
     if (!tree || !style || !layout || !layout.width || !layout.height) return;
-
-    const context = this.context;
-    context.save();
-    context.globalAlpha *= style.opacity;
-    if (style.background !== "transparent" && !style.background.includes("gradient")) {
-      roundedRect(context, layout.x, layout.y, layout.width, layout.height, style.borderRadius);
-      context.fillStyle = style.background;
-      context.fill();
-    }
-    if (style.borderWidth > 0) {
-      roundedRect(
-        context,
-        layout.x + style.borderWidth / 2,
-        layout.y + style.borderWidth / 2,
-        layout.width - style.borderWidth,
-        layout.height - style.borderWidth,
-        style.borderRadius,
-      );
-      context.strokeStyle = style.borderColor;
-      context.lineWidth = style.borderWidth;
-      context.stroke();
+    if (visibility && !visibility.subtreeInViewport) {
+      this.stats.culled += visibility.subtreeSize;
+      return;
     }
 
-    const text = tree.element.dataset.canvasText ?? "";
-    if (text) this.drawText(entity, text, style, layout);
-    context.restore();
+    if (!visibility || visibility.inViewport) {
+      const context = this.context;
+      context.save();
+      context.globalAlpha *= style.opacity;
+      if (style.background !== "transparent" && !style.background.includes("gradient")) {
+        roundedRect(context, layout.x, layout.y, layout.width, layout.height, style.borderRadius);
+        context.fillStyle = style.background;
+        context.fill();
+      }
+      if (style.borderWidth > 0) {
+        roundedRect(
+          context,
+          layout.x + style.borderWidth / 2,
+          layout.y + style.borderWidth / 2,
+          layout.width - style.borderWidth,
+          layout.height - style.borderWidth,
+          style.borderRadius,
+        );
+        context.strokeStyle = style.borderColor;
+        context.lineWidth = style.borderWidth;
+        context.stroke();
+      }
+
+      const text = tree.element.dataset.canvasText ?? "";
+      if (text) this.drawText(entity, text, style, layout);
+      context.restore();
+      this.stats.rendered++;
+    } else {
+      this.stats.culled++;
+    }
 
     for (const child of tree.children) this.renderNode(child);
   }
@@ -591,10 +700,15 @@ export class CanvasBodyElement extends HTMLElementBase {
   private hoveredEntity?: Entity;
   private pressedEntity?: Entity;
   private resizeObserver?: ResizeObserver;
+  private intersectionObserver?: IntersectionObserver;
+  private hostVisible = true;
+  private pendingFrame = true;
+  private visibleViewport: ViewportRect = { x: 0, y: 0, width: 0, height: 0 };
   private model: DataModel = {};
   private bindingSystem?: BindingSystem;
   private styleSystem?: StyleSystem;
   private layoutSystem?: LayoutSystem;
+  private visibilitySystem?: VisibilitySystem;
   private renderSystem?: RenderSystem;
 
   get data() {
@@ -613,11 +727,14 @@ export class CanvasBodyElement extends HTMLElementBase {
 
   disconnectedCallback() {
     this.resizeObserver?.disconnect();
+    this.intersectionObserver?.disconnect();
     cancelAnimationFrame(this.frame);
   }
 
   invalidate() {
+    this.pendingFrame = true;
     cancelAnimationFrame(this.frame);
+    if (!this.hostVisible) return;
     this.frame = requestAnimationFrame(() => this.update());
   }
 
@@ -651,6 +768,17 @@ export class CanvasBodyElement extends HTMLElementBase {
       width: this.logicalWidth,
       height: this.logicalHeight,
     }));
+    this.visibleViewport = {
+      x: 0,
+      y: 0,
+      width: this.logicalWidth,
+      height: this.logicalHeight,
+    };
+    this.visibilitySystem = new VisibilitySystem(
+      this.world,
+      () => this.visibleViewport,
+      () => this.overscan,
+    );
     if (this.context) {
       this.renderSystem = new RenderSystem(this.world, this.roots, this.context, () => ({
         width: this.logicalWidth,
@@ -673,6 +801,13 @@ export class CanvasBodyElement extends HTMLElementBase {
 
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(this);
+    if (typeof IntersectionObserver !== "undefined") {
+      this.intersectionObserver = new IntersectionObserver(
+        (entries) => this.onIntersection(entries[0]),
+        { threshold: [0, 0.01, 0.1, 0.25, 0.5, 0.75, 1] },
+      );
+      this.intersectionObserver.observe(this);
+    }
     this.resize();
   }
 
@@ -682,6 +817,10 @@ export class CanvasBodyElement extends HTMLElementBase {
 
   private get logicalHeight() {
     return number(this.getAttribute("height"), 540);
+  }
+
+  private get overscan() {
+    return Math.max(0, number(this.getAttribute("overscan"), 32));
   }
 
   private collectRules() {
@@ -743,14 +882,55 @@ export class CanvasBodyElement extends HTMLElementBase {
   }
 
   private update() {
-    if (!this.context) return;
+    if (!this.context || !this.hostVisible) {
+      this.pendingFrame = true;
+      return;
+    }
+    this.pendingFrame = false;
     this.bindingSystem?.update();
     this.styleSystem?.update();
     this.layoutSystem?.update();
-    this.renderSystem?.update();
+    this.visibilitySystem?.update();
+    const stats = this.renderSystem?.update() ?? { rendered: 0, culled: 0 };
     this.dispatchEvent(new CustomEvent("cbody:render", {
-      detail: { entities: this.world.entities.size },
+      detail: {
+        entities: this.world.entities.size,
+        rendered: stats.rendered,
+        culled: stats.culled,
+        suspended: false,
+      },
     }));
+  }
+
+  private onIntersection(entry: IntersectionObserverEntry | undefined) {
+    if (!entry) return;
+    const wasVisible = this.hostVisible;
+    this.hostVisible = entry.isIntersecting && entry.intersectionRect.width > 0 &&
+      entry.intersectionRect.height > 0;
+
+    if (this.hostVisible) {
+      const bounds = entry.boundingClientRect;
+      const intersection = entry.intersectionRect;
+      const scaleX = bounds.width > 0 ? this.logicalWidth / bounds.width : 1;
+      const scaleY = bounds.height > 0 ? this.logicalHeight / bounds.height : 1;
+      this.visibleViewport = {
+        x: Math.max(0, (intersection.left - bounds.left) * scaleX),
+        y: Math.max(0, (intersection.top - bounds.top) * scaleY),
+        width: Math.min(this.logicalWidth, intersection.width * scaleX),
+        height: Math.min(this.logicalHeight, intersection.height * scaleY),
+      };
+    } else {
+      this.visibleViewport = { x: 0, y: 0, width: 0, height: 0 };
+      cancelAnimationFrame(this.frame);
+    }
+
+    if (this.hostVisible && (!wasVisible || this.pendingFrame)) {
+      this.invalidate();
+    } else if (this.hostVisible) {
+      // A partial intersection changed during page scrolling. Recompute which
+      // entities are visible even when application state stayed unchanged.
+      this.invalidate();
+    }
   }
 
   private pointerPosition(event: PointerEvent) {
@@ -767,7 +947,13 @@ export class CanvasBodyElement extends HTMLElementBase {
     return entities.find((entity) => {
       const layout = this.world.layouts.get(entity);
       const style = this.world.styles.get(entity);
-      if (!layout || !style || style.display === "none") return false;
+      const visibility = this.world.visibility.get(entity);
+      if (
+        !layout ||
+        !style ||
+        style.display === "none" ||
+        (visibility && !visibility.inViewport)
+      ) return false;
       return point.x >= layout.x &&
         point.x <= layout.x + layout.width &&
         point.y >= layout.y &&

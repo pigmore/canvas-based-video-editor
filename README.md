@@ -225,7 +225,11 @@ Emitted after a frame has completed:
 
 ```js
 app.addEventListener("cbody:render", (event) => {
-  console.log(event.detail.entities);
+  console.log({
+    entities: event.detail.entities,
+    painted: event.detail.rendered,
+    culled: event.detail.culled
+  });
 });
 ```
 
@@ -250,6 +254,7 @@ stored in maps instead of behavior-heavy objects.
 | `Binding` | Original direct-text template and bound attributes |
 | `Style` | Resolved canvas-compatible visual and layout properties |
 | `Layout` | Numeric position, dimensions, and content box |
+| `Visibility` | Viewport intersection, subtree bounds, and subtree size |
 
 The frame pipeline is split into systems:
 
@@ -258,12 +263,62 @@ The frame pipeline is split into systems:
 | `BindingSystem` | Resolves `{paths}` and updates detached source values |
 | `StyleSystem` | Matches CSS rules, inline styles, and the hovered entity |
 | `LayoutSystem` | Calculates block/flex boxes in logical canvas coordinates |
+| `VisibilitySystem` | Marks visible entities and rolls up subtree bounds |
 | `InputSystem` | Hit-tests pointers and dispatches source-element events |
 | `RenderSystem` | Paints backgrounds, borders, and wrapped text |
 
 This separation is the basis for future dirty-component queries. The current
 prototype runs the main systems for every invalidated frame to keep the first
 implementation easy to inspect.
+
+## Offscreen rendering strategy
+
+CBody uses two levels of visibility optimization.
+
+### 1. Suspend an offscreen canvas host
+
+An `IntersectionObserver` watches the internal `<c-body>` host. When the canvas
+is completely outside the browser viewport:
+
+- scheduled animation frames are cancelled;
+- state mutations are retained;
+- binding, style, layout, visibility, and paint systems do not run;
+- one pending frame is scheduled when the host becomes visible again.
+
+This prevents canvas applications far above or below the page viewport from
+consuming frame time during long-page or “doom scrolling.”
+
+### 2. Cull entities outside the visible canvas region
+
+When part or all of the canvas is visible, `VisibilitySystem` compares every
+entity's layout box with the visible logical-canvas rectangle. It also rolls
+child bounds into each parent so an entirely offscreen subtree can be rejected
+with one check.
+
+The renderer skips:
+
+- background and border painting;
+- text measurement, wrapping, and painting;
+- descendant traversal when the whole subtree is outside the viewport.
+
+Pointer hit-testing ignores culled entities as well.
+
+Use `overscan` to paint a small area beyond the visible rectangle and avoid
+pop-in during fast scrolling:
+
+```html
+<cbody width="960" height="540" overscan="48">
+  <!-- application -->
+</cbody>
+```
+
+The default overscan is 32 logical canvas pixels. Set it to `0` for strict
+culling or increase it for aggressively scrolling interfaces.
+
+Layout still runs for entities inside an active canvas because their positions
+are needed to determine visibility. A future virtual-list system can skip
+layout for fixed-size offscreen rows by calculating their positions from an
+item index instead of creating every row entity.
 
 ## Supported CSS subset
 
