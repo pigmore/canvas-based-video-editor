@@ -385,6 +385,7 @@ export function FrameworkDemo() {
           <a href="#playground">Playground</a>
           <a href="#architecture">Architecture</a>
           <a href="#start">Quick start</a>
+          <a href="/editor">Motion editor</a>
         </nav>
         <a className="site-nav-cta" href="#start">Read the API <span>↗</span></a>
       </header>

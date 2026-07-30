@@ -41,9 +41,39 @@ type Layer = {
   visible: boolean;
 };
 
+type ProjectFile = {
+  format: "lumaframe";
+  version: 1;
+  name: string;
+  width: number;
+  height: number;
+  fps: number;
+  duration: number;
+  createdAt: string;
+  layers: Layer[];
+};
+
 const id = () => Math.random().toString(36).slice(2, 9);
 const clamp = (value: number, min: number, max: number) =>
   Math.min(max, Math.max(min, value));
+
+function downloadBlob(blob: Blob, filename: string) {
+  const anchor = document.createElement("a");
+  const url = URL.createObjectURL(blob);
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function blobToDataUrl(blob: Blob) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
 
 const initialLayers: Layer[] = [
   {
@@ -129,6 +159,159 @@ function layerColor(type: AssetType) {
   return "#d6ff43";
 }
 
+function renderComposition(
+  ctx: CanvasRenderingContext2D,
+  layers: Layer[],
+  time: number,
+  media: Map<string, HTMLImageElement | HTMLVideoElement>,
+  options: {
+    selectedId?: string;
+    selectionScale?: number;
+    showHud?: boolean;
+  } = {},
+) {
+  const selectionScale = options.selectionScale ?? 1;
+  ctx.clearRect(0, 0, STAGE_WIDTH, STAGE_HEIGHT);
+
+  const background = ctx.createLinearGradient(0, 0, STAGE_WIDTH, STAGE_HEIGHT);
+  background.addColorStop(0, "#17191f");
+  background.addColorStop(0.48, "#090a0c");
+  background.addColorStop(1, "#191b20");
+  ctx.fillStyle = background;
+  ctx.fillRect(0, 0, STAGE_WIDTH, STAGE_HEIGHT);
+
+  const glow = ctx.createRadialGradient(640, 350, 20, 640, 350, 510);
+  glow.addColorStop(0, "rgba(126, 111, 177, 0.18)");
+  glow.addColorStop(1, "rgba(12, 13, 15, 0)");
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, STAGE_WIDTH, STAGE_HEIGHT);
+
+  ctx.strokeStyle = "rgba(255,255,255,.032)";
+  ctx.lineWidth = 1;
+  for (let x = 40; x < STAGE_WIDTH; x += 40) {
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, STAGE_HEIGHT);
+    ctx.stroke();
+  }
+  for (let y = 40; y < STAGE_HEIGHT; y += 40) {
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(STAGE_WIDTH, y);
+    ctx.stroke();
+  }
+
+  const active = layers
+    .filter((layer) => layer.visible && time >= layer.start && time <= layer.end)
+    .sort((a, b) => transformAt(a, time).z - transformAt(b, time).z);
+
+  active.forEach((layer) => {
+    const transform = transformAt(layer, time);
+    ctx.save();
+    ctx.globalAlpha = clamp(transform.opacity, 0, 1);
+    ctx.translate(transform.x, transform.y);
+    ctx.rotate((transform.rotation * Math.PI) / 180);
+
+    if (layer.type === "text") {
+      const lines = (layer.text ?? "").split("\n");
+      const fontSize = Math.max(
+        10,
+        Math.min(
+          (transform.height / lines.length) * 0.78,
+          transform.width / 7.8,
+        ),
+      );
+      ctx.fillStyle = layer.color ?? "#fff";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.font = `800 ${fontSize}px Arial, Helvetica, sans-serif`;
+      ctx.shadowColor = "rgba(0,0,0,.24)";
+      ctx.shadowBlur = 16;
+      lines.forEach((line, index) => {
+        const lineY = (index - (lines.length - 1) / 2) * fontSize * 0.9;
+        ctx.fillText(line, 0, lineY, transform.width);
+      });
+    } else {
+      const item = media.get(layer.id);
+      if (item) {
+        try {
+          if (item instanceof HTMLVideoElement) {
+            const localTime = clamp(
+              time - layer.start,
+              0,
+              Math.max(0, item.duration || 0),
+            );
+            if (
+              Math.abs(item.currentTime - localTime) > 0.12 &&
+              item.readyState >= 1
+            ) {
+              item.currentTime = localTime;
+            }
+          }
+          const ready =
+            item instanceof HTMLImageElement
+              ? item.complete
+              : item.readyState >= 2;
+          if (ready) {
+            ctx.drawImage(
+              item,
+              -transform.width / 2,
+              -transform.height / 2,
+              transform.width,
+              transform.height,
+            );
+          } else {
+            ctx.fillStyle = "#22262d";
+            ctx.fillRect(
+              -transform.width / 2,
+              -transform.height / 2,
+              transform.width,
+              transform.height,
+            );
+          }
+        } catch {
+          // A video frame can be briefly unavailable during a seek.
+        }
+      }
+    }
+
+    if (options.selectedId === layer.id) {
+      ctx.globalAlpha = 1;
+      ctx.shadowBlur = 0;
+      ctx.strokeStyle = "#d6ff43";
+      ctx.lineWidth = 2 / selectionScale;
+      ctx.setLineDash([7 / selectionScale, 5 / selectionScale]);
+      ctx.strokeRect(
+        -transform.width / 2,
+        -transform.height / 2,
+        transform.width,
+        transform.height,
+      );
+      ctx.setLineDash([]);
+      const handle = 8 / selectionScale;
+      ctx.fillStyle = "#d6ff43";
+      [
+        [-transform.width / 2, -transform.height / 2],
+        [transform.width / 2, -transform.height / 2],
+        [-transform.width / 2, transform.height / 2],
+        [transform.width / 2, transform.height / 2],
+      ].forEach(([x, y]) =>
+        ctx.fillRect(x - handle / 2, y - handle / 2, handle, handle),
+      );
+    }
+    ctx.restore();
+  });
+
+  if (options.showHud) {
+    ctx.fillStyle = "rgba(255,255,255,.28)";
+    ctx.font = "500 11px Arial";
+    ctx.textAlign = "left";
+    ctx.fillText("LUMAFRAME / PREVIEW", 24, 32);
+    ctx.textAlign = "right";
+    ctx.fillText(formatTime(time), STAGE_WIDTH - 24, 32);
+  }
+}
+
 export function VideoEditor() {
   const [layers, setLayers] = useState<Layer[]>(initialLayers);
   const [selectedId, setSelectedId] = useState("title");
@@ -136,12 +319,18 @@ export function VideoEditor() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [isDraggingStage, setIsDraggingStage] = useState(false);
   const [toast, setToast] = useState("");
-  const duration = INITIAL_DURATION;
+  const [exportProgress, setExportProgress] = useState<number | null>(null);
+  const [isSavingProject, setIsSavingProject] = useState(false);
+  const [duration, setDuration] = useState(INITIAL_DURATION);
   const monitorRef = useRef<HTMLCanvasElement>(null);
   const timelineRef = useRef<HTMLCanvasElement>(null);
   const uploadRef = useRef<HTMLInputElement>(null);
+  const projectRef = useRef<HTMLInputElement>(null);
   const mediaRef = useRef<Map<string, HTMLImageElement | HTMLVideoElement>>(new Map());
   const animationRef = useRef<number | null>(null);
+  const exportAnimationRef = useRef<number | null>(null);
+  const exportCancelRef = useRef(false);
+  const exportRecorderRef = useRef<MediaRecorder | null>(null);
   const playbackRef = useRef({ wall: 0, time: 0 });
   const stageDragRef = useRef<{ id: string; offsetX: number; offsetY: number } | null>(null);
   const timelineDragRef = useRef<{
@@ -339,95 +528,11 @@ export function VideoEditor() {
     if (!ctx) return;
     const scale = rect.width / STAGE_WIDTH;
     ctx.setTransform(dpr * scale, 0, 0, dpr * scale, 0, 0);
-    ctx.clearRect(0, 0, STAGE_WIDTH, STAGE_HEIGHT);
-    const background = ctx.createLinearGradient(0, 0, STAGE_WIDTH, STAGE_HEIGHT);
-    background.addColorStop(0, "#17191f");
-    background.addColorStop(0.48, "#090a0c");
-    background.addColorStop(1, "#191b20");
-    ctx.fillStyle = background;
-    ctx.fillRect(0, 0, STAGE_WIDTH, STAGE_HEIGHT);
-    const glow = ctx.createRadialGradient(640, 350, 20, 640, 350, 510);
-    glow.addColorStop(0, "rgba(126, 111, 177, 0.18)");
-    glow.addColorStop(1, "rgba(12, 13, 15, 0)");
-    ctx.fillStyle = glow;
-    ctx.fillRect(0, 0, STAGE_WIDTH, STAGE_HEIGHT);
-    ctx.strokeStyle = "rgba(255,255,255,.032)";
-    ctx.lineWidth = 1;
-    for (let x = 40; x < STAGE_WIDTH; x += 40) {
-      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, STAGE_HEIGHT); ctx.stroke();
-    }
-    for (let y = 40; y < STAGE_HEIGHT; y += 40) {
-      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(STAGE_WIDTH, y); ctx.stroke();
-    }
-
-    const active = layers
-      .filter((layer) => layer.visible && currentTime >= layer.start && currentTime <= layer.end)
-      .sort((a, b) => transformAt(a, currentTime).z - transformAt(b, currentTime).z);
-
-    active.forEach((layer) => {
-      const transform = transformAt(layer, currentTime);
-      ctx.save();
-      ctx.globalAlpha = clamp(transform.opacity, 0, 1);
-      ctx.translate(transform.x, transform.y);
-      ctx.rotate((transform.rotation * Math.PI) / 180);
-      if (layer.type === "text") {
-        const lines = (layer.text ?? "").split("\n");
-        const fontSize = Math.max(10, Math.min(transform.height / lines.length * .78, transform.width / 7.8));
-        ctx.fillStyle = layer.color ?? "#fff";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.font = `800 ${fontSize}px Arial, Helvetica, sans-serif`;
-        ctx.shadowColor = "rgba(0,0,0,.24)";
-        ctx.shadowBlur = 16;
-        lines.forEach((line, index) => {
-          const lineY = (index - (lines.length - 1) / 2) * fontSize * .9;
-          ctx.fillText(line, 0, lineY, transform.width);
-        });
-      } else {
-        const media = mediaRef.current.get(layer.id);
-        if (media) {
-          try {
-            if (media instanceof HTMLVideoElement) {
-              const localTime = clamp(currentTime - layer.start, 0, Math.max(0, media.duration || 0));
-              if (Math.abs(media.currentTime - localTime) > .12 && media.readyState >= 1) media.currentTime = localTime;
-            }
-            const ready = media instanceof HTMLImageElement ? media.complete : media.readyState >= 2;
-            if (ready) {
-              ctx.drawImage(media, -transform.width / 2, -transform.height / 2, transform.width, transform.height);
-            } else {
-              ctx.fillStyle = "#22262d";
-              ctx.fillRect(-transform.width / 2, -transform.height / 2, transform.width, transform.height);
-            }
-          } catch {
-            // Video frames can be temporarily unavailable while seeking.
-          }
-        }
-      }
-      if (layer.id === selectedId) {
-        ctx.globalAlpha = 1;
-        ctx.shadowBlur = 0;
-        ctx.strokeStyle = "#d6ff43";
-        ctx.lineWidth = 2 / scale;
-        ctx.setLineDash([7 / scale, 5 / scale]);
-        ctx.strokeRect(-transform.width / 2, -transform.height / 2, transform.width, transform.height);
-        ctx.setLineDash([]);
-        const handle = 8 / scale;
-        ctx.fillStyle = "#d6ff43";
-        [
-          [-transform.width / 2, -transform.height / 2],
-          [transform.width / 2, -transform.height / 2],
-          [-transform.width / 2, transform.height / 2],
-          [transform.width / 2, transform.height / 2],
-        ].forEach(([x, y]) => ctx.fillRect(x - handle / 2, y - handle / 2, handle, handle));
-      }
-      ctx.restore();
+    renderComposition(ctx, layers, currentTime, mediaRef.current, {
+      selectedId,
+      selectionScale: scale,
+      showHud: true,
     });
-    ctx.fillStyle = "rgba(255,255,255,.28)";
-    ctx.font = "500 11px Arial";
-    ctx.textAlign = "left";
-    ctx.fillText("LUMAFRAME / PREVIEW", 24, 32);
-    ctx.textAlign = "right";
-    ctx.fillText(formatTime(currentTime), STAGE_WIDTH - 24, 32);
   }, [currentTime, layers, selectedId]);
 
   const drawTimeline = useCallback(() => {
@@ -576,6 +681,16 @@ export function VideoEditor() {
   }, [addKeyframe, deleteSelected, duration]);
 
   useEffect(() => () => {
+    exportCancelRef.current = true;
+    if (exportAnimationRef.current) {
+      cancelAnimationFrame(exportAnimationRef.current);
+    }
+    if (
+      exportRecorderRef.current &&
+      exportRecorderRef.current.state !== "inactive"
+    ) {
+      exportRecorderRef.current.stop();
+    }
     mediaRef.current.forEach((media) => {
       if (media.src.startsWith("blob:")) URL.revokeObjectURL(media.src);
     });
@@ -724,17 +839,208 @@ export function VideoEditor() {
   };
 
   const exportFrame = () => {
-    const canvas = monitorRef.current;
-    if (!canvas) return;
+    const canvas = document.createElement("canvas");
+    canvas.width = STAGE_WIDTH;
+    canvas.height = STAGE_HEIGHT;
+    const context = canvas.getContext("2d");
+    if (!context) return;
+    renderComposition(context, layers, currentTime, mediaRef.current);
     canvas.toBlob((blob) => {
       if (!blob) return;
-      const anchor = document.createElement("a");
-      anchor.href = URL.createObjectURL(blob);
-      anchor.download = `lumaframe-${formatTime(currentTime, true).replace(":", "-")}.png`;
-      anchor.click();
-      window.setTimeout(() => URL.revokeObjectURL(anchor.href), 500);
+      downloadBlob(
+        blob,
+        `lumaframe-${formatTime(currentTime, true).replace(":", "-")}.png`,
+      );
       flash("Current frame exported");
     }, "image/png");
+  };
+
+  const exportProject = async () => {
+    if (isSavingProject) return;
+    setIsSavingProject(true);
+    try {
+      const portableLayers = await Promise.all(
+        layers.map(async (layer) => {
+          if (!layer.source || !layer.source.startsWith("blob:")) return layer;
+          const response = await fetch(layer.source);
+          if (!response.ok) throw new Error(`Could not read ${layer.name}`);
+          return {
+            ...layer,
+            source: await blobToDataUrl(await response.blob()),
+          };
+        }),
+      );
+      const project: ProjectFile = {
+        format: "lumaframe",
+        version: 1,
+        name: "Product film — Scene 01",
+        width: STAGE_WIDTH,
+        height: STAGE_HEIGHT,
+        fps: FPS,
+        duration,
+        createdAt: new Date().toISOString(),
+        layers: portableLayers,
+      };
+      downloadBlob(
+        new Blob([JSON.stringify(project)], {
+          type: "application/vnd.lumaframe+json",
+        }),
+        "product-film-scene-01.lumaframe",
+      );
+      flash("Portable project exported");
+    } catch (error) {
+      flash(error instanceof Error ? error.message : "Project export failed");
+    } finally {
+      setIsSavingProject(false);
+    }
+  };
+
+  const importProject = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    try {
+      const project = JSON.parse(await file.text()) as Partial<ProjectFile>;
+      if (
+        project.format !== "lumaframe" ||
+        project.version !== 1 ||
+        !Array.isArray(project.layers)
+      ) {
+        throw new Error("This is not a valid LumaFrame project");
+      }
+
+      mediaRef.current.forEach((mediaItem) => {
+        if (mediaItem.src.startsWith("blob:")) URL.revokeObjectURL(mediaItem.src);
+      });
+      mediaRef.current.clear();
+
+      const nextLayers = project.layers as Layer[];
+      nextLayers.forEach((layer) => {
+        if (!layer.source || layer.type === "text") return;
+        if (layer.type === "image") {
+          const image = new Image();
+          image.src = layer.source;
+          mediaRef.current.set(layer.id, image);
+        } else {
+          const video = document.createElement("video");
+          video.src = layer.source;
+          video.muted = true;
+          video.playsInline = true;
+          video.preload = "auto";
+          video.load();
+          mediaRef.current.set(layer.id, video);
+        }
+      });
+
+      setLayers(nextLayers);
+      setDuration(
+        typeof project.duration === "number" && project.duration > 0
+          ? project.duration
+          : INITIAL_DURATION,
+      );
+      setCurrentTime(0);
+      setSelectedId(nextLayers[0]?.id ?? "");
+      setIsPlaying(false);
+      flash(`${file.name} opened`);
+    } catch (error) {
+      flash(error instanceof Error ? error.message : "Could not open project");
+    }
+  };
+
+  const exportVideo = () => {
+    if (exportProgress !== null) return;
+    if (
+      typeof MediaRecorder === "undefined" ||
+      typeof HTMLCanvasElement.prototype.captureStream !== "function"
+    ) {
+      flash("Video export is not supported in this browser");
+      return;
+    }
+
+    const canvas = document.createElement("canvas");
+    canvas.width = STAGE_WIDTH;
+    canvas.height = STAGE_HEIGHT;
+    const context = canvas.getContext("2d");
+    if (!context) return;
+
+    const mimeType = [
+      "video/webm;codecs=vp9",
+      "video/webm;codecs=vp8",
+      "video/webm",
+    ].find((type) => MediaRecorder.isTypeSupported(type));
+    if (!mimeType) {
+      flash("This browser cannot encode WebM video");
+      return;
+    }
+
+    setIsPlaying(false);
+    exportCancelRef.current = false;
+    setExportProgress(0);
+    const stream = canvas.captureStream(FPS);
+    const recorder = new MediaRecorder(stream, {
+      mimeType,
+      videoBitsPerSecond: 8_000_000,
+    });
+    exportRecorderRef.current = recorder;
+    const chunks: BlobPart[] = [];
+    recorder.ondataavailable = (event) => {
+      if (event.data.size) chunks.push(event.data);
+    };
+    recorder.onerror = () => {
+      stream.getTracks().forEach((track) => track.stop());
+      setExportProgress(null);
+      exportRecorderRef.current = null;
+      flash("Video export failed");
+    };
+    recorder.onstop = () => {
+      stream.getTracks().forEach((track) => track.stop());
+      exportRecorderRef.current = null;
+      setExportProgress(null);
+      if (!exportCancelRef.current && chunks.length) {
+        downloadBlob(
+          new Blob(chunks, { type: mimeType }),
+          "product-film-scene-01.webm",
+        );
+        flash("Video export complete");
+      }
+    };
+
+    const startedAt = performance.now();
+    const renderExportFrame = (now: number) => {
+      if (exportCancelRef.current) {
+        if (recorder.state !== "inactive") recorder.stop();
+        return;
+      }
+      const time = clamp((now - startedAt) / 1000, 0, duration);
+      renderComposition(context, layers, time, mediaRef.current);
+      setExportProgress(time / duration);
+      if (time >= duration) {
+        window.setTimeout(() => {
+          if (recorder.state !== "inactive") recorder.stop();
+        }, 120);
+        return;
+      }
+      exportAnimationRef.current = requestAnimationFrame(renderExportFrame);
+    };
+
+    renderComposition(context, layers, 0, mediaRef.current);
+    recorder.start(250);
+    exportAnimationRef.current = requestAnimationFrame(renderExportFrame);
+  };
+
+  const cancelVideoExport = () => {
+    exportCancelRef.current = true;
+    if (exportAnimationRef.current) {
+      cancelAnimationFrame(exportAnimationRef.current);
+    }
+    if (
+      exportRecorderRef.current &&
+      exportRecorderRef.current.state !== "inactive"
+    ) {
+      exportRecorderRef.current.stop();
+    }
+    setExportProgress(null);
+    flash("Video export cancelled");
   };
 
   const selectedFrameIndex = selected?.keyframes.findIndex(
@@ -748,6 +1054,29 @@ export function VideoEditor() {
   return (
     <main className="editor">
       {toast && <div className="toast">{toast}</div>}
+      {exportProgress !== null && (
+        <div className="export-overlay" role="status" aria-live="polite">
+          <div className="export-card">
+            <div className="export-card-heading">
+              <span>Rendering video</span>
+              <strong>{Math.round(exportProgress * 100)}%</strong>
+            </div>
+            <div className="export-meter">
+              <span style={{ width: `${exportProgress * 100}%` }} />
+            </div>
+            <p>
+              Rendering 1280 × 720 at 30 FPS in real time. Keep this tab open.
+            </p>
+            <button
+              className="ghost-button"
+              type="button"
+              onClick={cancelVideoExport}
+            >
+              Cancel export
+            </button>
+          </div>
+        </div>
+      )}
       <header className="topbar">
         <div className="brand"><span className="brand-mark" aria-hidden="true" />LUMAFRAME</div>
         <div className="project-name">Product film <span>/</span> Scene 01</div>
@@ -759,7 +1088,43 @@ export function VideoEditor() {
           title="Space: play · K: keyframe · ← →: frame · Delete: remove"
           onClick={() => flash("Space: play · K: keyframe · ← →: step · Delete: remove")}
         >?</button>
-        <button className="primary-button" type="button" onClick={exportFrame}>Export frame</button>
+        <button
+          className="ghost-button"
+          type="button"
+          onClick={() => projectRef.current?.click()}
+        >
+          Open project
+        </button>
+        <input
+          ref={projectRef}
+          type="file"
+          hidden
+          accept=".lumaframe,application/json,application/vnd.lumaframe+json"
+          onChange={importProject}
+        />
+        <button
+          className="ghost-button"
+          type="button"
+          disabled={isSavingProject}
+          onClick={exportProject}
+        >
+          {isSavingProject ? "Packing…" : "Save project"}
+        </button>
+        <button
+          className="ghost-button"
+          type="button"
+          onClick={exportFrame}
+        >
+          Frame PNG
+        </button>
+        <button
+          className="primary-button"
+          type="button"
+          disabled={exportProgress !== null}
+          onClick={exportVideo}
+        >
+          Export video
+        </button>
       </header>
 
       <section className="workspace">

@@ -2,13 +2,13 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-async function render() {
+async function render(path = "/") {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
   const { default: worker } = await import(workerUrl.href);
 
   return worker.fetch(
-    new Request("http://localhost/", {
+    new Request(`http://localhost${path}`, {
       headers: { accept: "text/html" },
     }),
     {
@@ -37,6 +37,23 @@ test("server-renders the CBody framework site", async () => {
   assert.match(html, /Live playground/);
   assert.match(html, /ECS internals/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape/);
+});
+
+test("renders LumaFrame video and project export controls", async () => {
+  const [response, editorSource] = await Promise.all([
+    render("/editor"),
+    readFile(new URL("../app/video-editor.tsx", import.meta.url), "utf8"),
+  ]);
+
+  assert.equal(response.status, 200);
+  const html = await response.text();
+  assert.match(html, /Export video/);
+  assert.match(html, /Save project/);
+  assert.match(html, /Open project/);
+  assert.match(editorSource, /new MediaRecorder/);
+  assert.match(editorSource, /canvas\.captureStream\(FPS\)/);
+  assert.match(editorSource, /format:\s*"lumaframe"/);
+  assert.match(editorSource, /application\/vnd\.lumaframe\+json/);
 });
 
 test("uses a standards-compliant internal custom element name", async () => {

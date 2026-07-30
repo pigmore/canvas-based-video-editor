@@ -74,9 +74,14 @@ Open:
 
 - Playground: `http://localhost:3000/`
 - Cookbook: `http://localhost:3000/cookbook`
+- LumaFrame motion editor: `http://localhost:3000/editor`
 
 If port 3000 is occupied, the development server prints the next available
 local URL.
+
+The LumaFrame editor can export a 1280×720 WebM video, a PNG frame, and a
+portable `.lumaframe` project file. Project files embed uploaded media and can
+be reopened with the editor's **Open project** control.
 
 ## First canvas surface
 
