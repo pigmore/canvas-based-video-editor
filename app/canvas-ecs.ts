@@ -803,8 +803,76 @@ export class CanvasBodyElement extends HTMLElementBase {
   }
 }
 
-export function registerCanvasBody() {
-  if (typeof customElements !== "undefined" && !customElements.get("cbody")) {
-    customElements.define("cbody", CanvasBodyElement);
+const aliasHosts = new WeakMap<HTMLElement, CanvasBodyElement>();
+let aliasObserver: MutationObserver | undefined;
+
+function upgradeCanvasBodyAlias(alias: HTMLElement) {
+  if (aliasHosts.has(alias)) return;
+
+  const host = document.createElement("c-body") as CanvasBodyElement;
+  for (const attribute of Array.from(alias.attributes)) {
+    host.setAttribute(attribute.name, attribute.value);
+  }
+  while (alias.firstChild) host.append(alias.firstChild);
+
+  host.style.width = "100%";
+  alias.style.display = "block";
+  alias.replaceChildren(host);
+  aliasHosts.set(alias, host);
+
+  Object.defineProperties(alias, {
+    data: {
+      configurable: true,
+      get: () => host.data,
+      set: (value: DataModel) => { host.data = value; },
+    },
+    invalidate: {
+      configurable: true,
+      value: () => host.invalidate(),
+    },
+  });
+
+  for (const eventName of ["cbody:render", "cbody:click"]) {
+    host.addEventListener(eventName, (event) => {
+      alias.dispatchEvent(new CustomEvent(eventName, {
+        detail: (event as CustomEvent).detail,
+      }));
+    });
+  }
+}
+
+function upgradeCanvasBodyAliases(root: ParentNode) {
+  if (root instanceof HTMLElement && root.matches("cbody")) {
+    upgradeCanvasBodyAlias(root);
+  }
+  for (const alias of Array.from(root.querySelectorAll<HTMLElement>("cbody"))) {
+    upgradeCanvasBodyAlias(alias);
+  }
+}
+
+export function registerCanvasBody(root: ParentNode = document) {
+  if (typeof customElements === "undefined" || typeof document === "undefined") {
+    return;
+  }
+
+  // The Custom Elements specification requires a hyphenated name. Authors can
+  // still use <cbody>; it is upgraded into this internal standards-compliant host.
+  if (!customElements.get("c-body")) {
+    customElements.define("c-body", CanvasBodyElement);
+  }
+  upgradeCanvasBodyAliases(root);
+
+  if (!aliasObserver) {
+    aliasObserver = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        for (const node of Array.from(mutation.addedNodes)) {
+          if (node instanceof HTMLElement) upgradeCanvasBodyAliases(node);
+        }
+      }
+    });
+    aliasObserver.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+    });
   }
 }

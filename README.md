@@ -16,7 +16,8 @@ interface is painted onto a high-DPI `<canvas>`.
 
 ## What the prototype demonstrates
 
-- A `<cbody>` custom element that owns one responsive canvas.
+- A `<cbody>` authoring element backed by an internal standards-compliant
+  `<c-body>` custom element.
 - Source element compilation followed by DOM detachment.
 - Deeply reactive state exposed through `cbody.data`.
 - `{path}` interpolation in direct text and attributes.
@@ -85,6 +86,17 @@ Register the custom element before using the runtime:
 import { registerCanvasBody } from "./canvas-ecs";
 
 registerCanvasBody();
+```
+
+Call it after the authored `<cbody>` exists in the document. When inserting
+markup dynamically, pass its container to upgrade it synchronously:
+
+```js
+preview.innerHTML = "<cbody>...</cbody>";
+registerCanvasBody(preview);
+
+const app = preview.querySelector("cbody");
+app.data = { count: 0 };
 ```
 
 Author the interface with ordinary markup:
@@ -179,7 +191,13 @@ app.data = {
 
 ### `registerCanvasBody()`
 
-Defines the `<cbody>` custom element once. Calling it again is safe.
+Defines the internal `<c-body>` custom element and synchronously upgrades every
+authored `<cbody>` element on the page. Calling it again is safe.
+
+Custom-element registry names are required by the browser to contain a hyphen,
+so `customElements.define("cbody", ...)` is invalid. CBody preserves the cleaner
+public `<cbody>` syntax through a compatibility wrapper while using `<c-body>`
+internally.
 
 ### `cbody.data`
 

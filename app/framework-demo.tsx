@@ -331,9 +331,9 @@ export function FrameworkDemo() {
   const [entityCount, setEntityCount] = useState(0);
 
   useEffect(() => {
-    registerCanvasBody();
     if (!previewRef.current) return;
     previewRef.current.innerHTML = `<cbody width="960" height="560" aria-label="Interactive CBody framework demo">${source}</cbody>`;
+    registerCanvasBody(previewRef.current);
     const app = previewRef.current.querySelector("cbody") as CanvasBodyElement | null;
     if (!app) return;
 

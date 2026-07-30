@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 async function render() {
@@ -36,4 +37,14 @@ test("server-renders the CBody framework site", async () => {
   assert.match(html, /Live playground/);
   assert.match(html, /ECS internals/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape/);
+});
+
+test("uses a standards-compliant internal custom element name", async () => {
+  const runtime = await readFile(
+    new URL("../app/canvas-ecs.ts", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(runtime, /customElements\.define\("c-body", CanvasBodyElement\)/);
+  assert.doesNotMatch(runtime, /customElements\.define\("cbody"/);
 });
