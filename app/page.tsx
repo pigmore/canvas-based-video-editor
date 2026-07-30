@@ -1,5 +1,5 @@
-import { VideoEditor } from "./video-editor";
+import { FrameworkDemo } from "./framework-demo";
 
 export default function Home() {
-  return <VideoEditor />;
+  return <FrameworkDemo />;
 }

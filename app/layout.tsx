@@ -23,25 +23,30 @@ export async function generateMetadata(): Promise<Metadata> {
 
   return {
     metadataBase,
-    title: "LumaFrame — Canvas motion editor",
+    title: "CBody — DOM-shaped authoring, canvas-native rendering",
     description:
-      "Compose images, video and type on a canvas timeline with transform keyframes and easing.",
+      "An experimental ECS framework that compiles familiar HTML, CSS, JavaScript, and reactive bindings into one canvas.",
     icons: {
       icon: "/favicon.svg",
       shortcut: "/favicon.svg",
     },
     openGraph: {
-      title: "LumaFrame — Make ideas move",
+      title: "CBody — Write the web. Render the canvas.",
       description:
-        "A precision canvas editor for video, images, type, timeline clips and transform keyframes.",
-      images: [{ url: "/og.png", width: 1734, height: 910, alt: "LumaFrame motion editor" }],
+        "DOM-shaped authoring, reactive bindings, ECS internals, and canvas-native output.",
+      images: [{
+        url: "/og-cbody.png",
+        width: 1734,
+        height: 910,
+        alt: "CBody turns familiar web markup into ECS components and one canvas",
+      }],
     },
     twitter: {
       card: "summary_large_image",
-      title: "LumaFrame — Make ideas move",
+      title: "CBody — Write the web. Render the canvas.",
       description:
-        "Compose and animate media with a canvas monitor, timeline, keyframes and easing.",
-      images: ["/og.png"],
+        "An experimental ECS runtime for canvas-rendered interfaces.",
+      images: ["/og-cbody.png"],
     },
   };
 }
@@ -53,9 +58,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
-      >
+      <body className={`${geistSans.variable} ${geistMono.variable}`}>
         {children}
       </body>
     </html>

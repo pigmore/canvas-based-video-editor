@@ -22,15 +22,18 @@ async function render() {
   );
 }
 
-test("server-renders the LumaFrame editor", async () => {
+test("server-renders the CBody framework site", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
 
   const html = await response.text();
-  assert.match(html, /<title>LumaFrame — Canvas motion editor<\/title>/i);
-  assert.match(html, /LUMAFRAME/);
-  assert.match(html, /Upload media/);
-  assert.match(html, /Canvas timeline with layers and keyframes/);
+  assert.match(
+    html,
+    /<title>CBody — DOM-shaped authoring, canvas-native rendering<\/title>/i,
+  );
+  assert.match(html, /Write the web/);
+  assert.match(html, /Live playground/);
+  assert.match(html, /ECS internals/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape/);
 });
